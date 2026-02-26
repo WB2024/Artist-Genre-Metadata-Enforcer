@@ -72,7 +72,30 @@ On first run, you'll be prompted to configure your library base path.
 
 ---
 
-## 🚀 Usage
+## � Updating
+
+When a new version is released, simply re-download and replace the script:
+
+### Quick update (one-liner)
+
+```bash
+sudo curl -o /usr/local/bin/music-genre-enforcer https://raw.githubusercontent.com/WB2024/Artist-Genre-Metadata-Enforcer/main/music-genre-enforcer.py && sudo chmod +x /usr/local/bin/music-genre-enforcer
+```
+
+### Or if you cloned the repo
+
+```bash
+cd Artist-Genre-Metadata-Enforcer
+git pull
+sudo cp music-genre-enforcer.py /usr/local/bin/music-genre-enforcer
+sudo chmod +x /usr/local/bin/music-genre-enforcer
+```
+
+> **Note:** Your configuration and artist definitions in `~/.config/music-genre-enforcer/` are preserved—updating only replaces the script itself.
+
+---
+
+## �🚀 Usage
 
 ### Your library structure
 
