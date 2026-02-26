@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple
@@ -166,15 +167,19 @@ def discover_artist_dirs(base: Path) -> List[Path]:
       base/<group>/<artist>/...
 
     Returns list of artist dir Paths.
+    Uses os.scandir() for faster directory enumeration.
     """
     artists: List[Path] = []
     if not base.exists():
         return artists
 
-    groups = [p for p in base.iterdir() if p.is_dir()]
-    for group in sorted(groups, key=lambda p: p.name.casefold()):
-        for artist in sorted([p for p in group.iterdir() if p.is_dir()], key=lambda p: p.name.casefold()):
-            artists.append(artist)
+    with os.scandir(base) as groups:
+        sorted_groups = sorted([e for e in groups if e.is_dir()], key=lambda e: e.name.casefold())
+    for group in sorted_groups:
+        with os.scandir(group.path) as artist_entries:
+            sorted_artists = sorted([e for e in artist_entries if e.is_dir()], key=lambda e: e.name.casefold())
+        for artist in sorted_artists:
+            artists.append(Path(artist.path))
     return artists
 
 
@@ -188,9 +193,12 @@ def is_audio_file(path: Path, supported_exts: Set[str]) -> bool:
 def iter_audio_files(root: Path, supported_exts: Set[str]) -> Iterable[Path]:
     for dirpath, _, filenames in os.walk(root):
         for fn in filenames:
-            p = Path(dirpath) / fn
-            if is_audio_file(p, supported_exts):
-                yield p
+            # Early extension check before creating Path object
+            ext = os.path.splitext(fn)[1].lower()
+            if ext in IGNORE_EXTS:
+                continue
+            if ext in supported_exts:
+                yield Path(dirpath) / fn
 
 
 def set_genre_on_file(path: Path, genre: str, dry_run: bool) -> Tuple[bool, str]:
@@ -223,17 +231,26 @@ def set_genre_on_file(path: Path, genre: str, dry_run: bool) -> Tuple[bool, str]
         return (False, f"error:{e.__class__.__name__}")
 
 
-def apply_genre_to_artist_dir(artist_dir: Path, genre: str, cfg: AppConfig) -> Dict[str, int]:
-    total = changed = skipped = errors = 0
-    for f in iter_audio_files(artist_dir, cfg.supported_exts):
-        total += 1
-        ok, status = set_genre_on_file(f, genre, cfg.dry_run)
-        if status.startswith("error:"):
-            errors += 1
-        elif ok:
-            changed += 1
-        else:
-            skipped += 1
+def apply_genre_to_artist_dir(artist_dir: Path, genre: str, cfg: AppConfig, workers: int = 8) -> Dict[str, int]:
+    """Apply genre to all audio files in artist_dir using parallel processing."""
+    files = list(iter_audio_files(artist_dir, cfg.supported_exts))
+    total = len(files)
+    changed = skipped = errors = 0
+
+    if not files:
+        return {"total": 0, "changed": 0, "skipped": 0, "errors": 0}
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(set_genre_on_file, f, genre, cfg.dry_run): f for f in files}
+        for future in as_completed(futures):
+            ok, status = future.result()
+            if status.startswith("error:"):
+                errors += 1
+            elif ok:
+                changed += 1
+            else:
+                skipped += 1
+
     return {"total": total, "changed": changed, "skipped": skipped, "errors": errors}
 
 
@@ -513,14 +530,16 @@ def menu(cfg_dir: Path) -> int:
 
                 print("\nApplying...\n")
                 totals = {"total": 0, "changed": 0, "skipped": 0, "errors": 0}
-                for artist, genre in defined_items:
+                total_artists = len(defined_items)
+                for i, (artist, genre) in enumerate(defined_items, 1):
+                    print(f"[{i}/{total_artists}] Processing {artist}...", end="", flush=True)
                     artist_dir = name_to_dir[artist]
                     counts = apply_genre_to_artist_dir(artist_dir, genre, cfg)
                     totals["total"] += counts["total"]
                     totals["changed"] += counts["changed"]
                     totals["skipped"] += counts["skipped"]
                     totals["errors"] += counts["errors"]
-                    print(f"- {artist}: total={counts['total']} changed={counts['changed']} skipped={counts['skipped']} errors={counts['errors']}")
+                    print(f" done (files={counts['total']} changed={counts['changed']} errors={counts['errors']})")
 
                 print("\nTotals:")
                 print(f"  total={totals['total']} changed={totals['changed']} skipped={totals['skipped']} errors={totals['errors']}")
