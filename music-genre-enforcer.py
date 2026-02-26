@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +39,7 @@ except ImportError:
 APP_DIR_NAME = "music-genre-enforcer"
 CONFIG_FILE_NAME = "config.json"
 DEFINITIONS_FILE_NAME = "artist_genres.json"
+LAST_APPLY_FILE_NAME = "last_apply.json"
 
 SUPPORTED_EXTS_DEFAULT = {
     ".mp3", ".flac", ".m4a", ".mp4", ".ogg", ".opus", ".oga",
@@ -123,6 +125,41 @@ def load_definitions(cfg_dir: Path) -> Dict[str, str]:
 
 def save_definitions(cfg_dir: Path, defs: Dict[str, str]) -> None:
     write_json(cfg_dir / DEFINITIONS_FILE_NAME, defs)
+
+
+def load_last_apply_time(cfg_dir: Path) -> Optional[float]:
+    """Load the timestamp of the last successful apply run."""
+    raw = read_json(cfg_dir / LAST_APPLY_FILE_NAME, None)
+    if isinstance(raw, dict) and "timestamp" in raw:
+        return float(raw["timestamp"])
+    return None
+
+
+def save_last_apply_time(cfg_dir: Path, timestamp: float) -> None:
+    """Save the timestamp of a successful apply run."""
+    write_json(cfg_dir / LAST_APPLY_FILE_NAME, {"timestamp": timestamp})
+
+
+def has_changes_since(root: Path, since: float) -> bool:
+    """
+    Check if any directory under root has mtime > since.
+    This catches new albums (new directories) and new files (updates parent dir mtime).
+    Short-circuits on first match for speed.
+    """
+    try:
+        if root.stat().st_mtime > since:
+            return True
+    except OSError:
+        return True  # If we can't stat, assume changed
+    
+    for dirpath, dirnames, _ in os.walk(root):
+        for dirname in dirnames:
+            try:
+                if os.path.getmtime(os.path.join(dirpath, dirname)) > since:
+                    return True
+            except OSError:
+                return True  # If we can't stat, assume changed
+    return False
 
 
 def pause(msg: str = "Press Enter to continue...") -> None:
@@ -472,10 +509,11 @@ def menu(cfg_dir: Path) -> int:
 
         print("1) Configure (edit base path/extensions/dry-run)")
         print("2) Scan artists and prompt for NEW artist genres")
-        print("3) Apply genres to ALL defined artists (write tags)")
-        print("4) List undefined artists")
-        print("5) Edit an existing artist genre")
-        print("6) Toggle dry-run")
+        print("3) Smart apply (only artists modified since last run)")
+        print("4) Full apply (check ALL artists - slower but thorough)")
+        print("5) List undefined artists")
+        print("6) Edit an existing artist genre")
+        print("7) Toggle dry-run")
         print("q) Quit")
         print()
 
@@ -488,7 +526,7 @@ def menu(cfg_dir: Path) -> int:
             cfg = run_config_wizard(cfg_dir, cfg)
             continue
 
-        if choice in ("2", "3", "4"):
+        if choice in ("2", "3", "4", "5"):
             base = cfg.library_base
             if not base.exists():
                 print(f"Library base does not exist: {base}")
@@ -506,7 +544,7 @@ def menu(cfg_dir: Path) -> int:
                 pause()
                 continue
 
-            if choice == "4":
+            if choice == "5":
                 undefined = sorted([a for a in artist_names if not defs.get(a, "").strip()], key=str.casefold)
                 if not undefined:
                     print("No undefined artists.")
@@ -517,7 +555,8 @@ def menu(cfg_dir: Path) -> int:
                 pause()
                 continue
 
-            if choice == "3":
+            if choice in ("3", "4"):
+                smart_mode = (choice == "3")
                 defined_items = [(a, g) for a, g in defs.items() if g.strip() and a in name_to_dir]
                 defined_items.sort(key=lambda x: x[0].casefold())
                 if not defined_items:
@@ -525,13 +564,39 @@ def menu(cfg_dir: Path) -> int:
                     pause()
                     continue
 
-                if not prompt_yes_no(f"Apply genre tags to {len(defined_items)} artists now?", default=True):
+                # For smart mode, filter to only modified artists
+                last_apply = load_last_apply_time(cfg_dir)
+                if smart_mode and last_apply is not None:
+                    print(f"Checking for artists modified since last apply...")
+                    modified_items = []
+                    for artist, genre in defined_items:
+                        artist_dir = name_to_dir[artist]
+                        if has_changes_since(artist_dir, last_apply):
+                            modified_items.append((artist, genre))
+                    
+                    if not modified_items:
+                        print(f"\nNo artists have been modified since last apply.")
+                        print("Use option 4 (Full apply) to force check all artists.")
+                        pause()
+                        continue
+                    
+                    print(f"Found {len(modified_items)} modified artist(s) out of {len(defined_items)} total.")
+                    items_to_process = modified_items
+                else:
+                    if smart_mode and last_apply is None:
+                        print("No previous apply found - will process all artists.")
+                    items_to_process = defined_items
+
+                mode_str = "smart" if smart_mode else "full"
+                if not prompt_yes_no(f"Apply genre tags to {len(items_to_process)} artists ({mode_str} mode)?", default=True):
                     continue
+
+                run_start_time = time.time()
 
                 print("\nApplying...\n")
                 totals = {"total": 0, "changed": 0, "skipped": 0, "errors": 0}
-                total_artists = len(defined_items)
-                for i, (artist, genre) in enumerate(defined_items, 1):
+                total_artists = len(items_to_process)
+                for i, (artist, genre) in enumerate(items_to_process, 1):
                     print(f"[{i}/{total_artists}] Processing {artist}...", end="", flush=True)
                     artist_dir = name_to_dir[artist]
                     counts = apply_genre_to_artist_dir(artist_dir, genre, cfg)
@@ -545,15 +610,19 @@ def menu(cfg_dir: Path) -> int:
                 print(f"  total={totals['total']} changed={totals['changed']} skipped={totals['skipped']} errors={totals['errors']}")
                 if cfg.dry_run:
                     print("\nNOTE: dry-run is ON, so nothing was written.")
+                else:
+                    # Save the apply timestamp for smart mode
+                    save_last_apply_time(cfg_dir, run_start_time)
+                    print(f"\nTimestamp saved for smart apply.")
                 pause()
                 continue
 
-        if choice == "5":
+        if choice == "6":
             defs = edit_defined_artist_picker(defs, cfg_dir)
             # definitions already saved inside the picker
             continue
 
-        if choice == "6":
+        if choice == "7":
             cfg.dry_run = not cfg.dry_run
             save_config(cfg_dir, cfg)
             print(f"Dry-run is now: {cfg.dry_run}")
