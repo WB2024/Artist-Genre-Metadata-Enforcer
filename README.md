@@ -15,12 +15,14 @@ A lightweight, filesystem-driven Python tool that enforces **your personal genre
 - 🎯 **Artist-based genre enforcement** — Define genre once per artist, apply to their entire discography
 - 💾 **Persistent definitions** — Never re-prompt for artists you've already defined
 - 🔄 **Incremental workflow** — Only prompts for new artists on subsequent runs
+- ⚡ **Smart apply mode** — Only processes artists modified since last run (fast for large libraries)
 - 🎨 **Reuse existing genres** — Pick from your already-defined genres to maintain consistency
 - 🗂️ **Filesystem-driven** — No database; works directly with your folder structure
 - 🏷️ **Universal format support** — Writes to MP3, FLAC, M4A, OGG, OPUS, and more via [Mutagen](https://mutagen.readthedocs.io/)
 - 🔍 **Dry-run mode** — Preview changes before writing
 - 🐧 **Debian-friendly** — Uses system Python packages (no pip/venv headaches)
 - 📋 **Interactive CLI** — Clean menu-driven interface, no GUI dependencies
+- 🚀 **Parallel processing** — Uses multiple threads for faster tagging
 
 ---
 
@@ -132,7 +134,9 @@ Where:
    - Press `l` to list existing genres
    - Press `p` to pick from existing genres (keeps spelling/casing consistent)
    - Press `s` to skip an artist
-3. **Apply genres** to all defined artists (menu option `3`)
+3. **Apply genres** using smart or full mode:
+   - **Smart apply** (option `3`) — Only processes artists with new/modified files since last run
+   - **Full apply** (option `4`) — Checks all artists (use periodically for thorough verification)
    - Writes the `GENRE` tag to every audio file under each artist folder
    - Skips files that already have the correct genre
 
@@ -168,10 +172,11 @@ Pick number (blank cancels): 1
 ```
 1) Configure — Edit base library path, file extensions, dry-run mode
 2) Scan artists and prompt for NEW artist genres
-3) Apply genres to ALL defined artists (write tags)
-4) List undefined artists
-5) Edit an existing artist genre (numbered picker)
-6) Toggle dry-run (preview mode on/off)
+3) Smart apply — Only process artists modified since last run (fast)
+4) Full apply — Check ALL artists (slower but thorough)
+5) List undefined artists
+6) Edit an existing artist genre (numbered picker)
+7) Toggle dry-run (preview mode on/off)
 q) Quit
 ```
 
@@ -184,7 +189,8 @@ All settings and definitions are stored in:
 ```
 ~/.config/music-genre-enforcer/
 ├── config.json          # Library path, extensions, dry-run setting
-└── artist_genres.json   # Your artist → genre mappings
+├── artist_genres.json   # Your artist → genre mappings
+└── last_apply.json      # Timestamp of last apply (for smart mode)
 ```
 
 **Portable?** Yes—copy these files to another machine and your definitions travel with you.
