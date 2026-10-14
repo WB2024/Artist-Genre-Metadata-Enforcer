@@ -103,6 +103,34 @@ def state():
     }
 
 
+@app.get("/api/summary")
+def summary():
+    """Compact, flat-ish payload for dashboard widgets (e.g. Glance custom-api)."""
+    cfg = store.load_config()
+    defs = store.load_defs()
+    names = {a.name for a in _artists()}
+    total = len(names)
+    defined = sum(1 for n in names if defs.get(n))
+    genres = sorted(_genre_counts(defs), key=lambda g: -g["count"])
+    hist = store.history()
+    last = hist[0] if hist else None
+    job = _job.to_dict(log_tail=0) if _job else None
+    return {
+        "library_ok": Path(cfg["library_base"]).is_dir(),
+        "artists": total, "defined": defined, "undefined": total - defined,
+        "pct": round(defined * 100 / total) if total else 0,
+        "genres": len(genres), "top_genres": genres[:8],
+        "dry_run": cfg["dry_run"], "lastfm": bool(cfg["lastfm_api_key"]),
+        "running": bool(job and job["state"] == "running"),
+        "job": job and {"mode": job["mode"], "done": job["done_artists"], "total": job["total_artists"], "current": job["current"]},
+        "last_apply": store.last_apply(),
+        "last_run": last and {"state": last["state"], "mode": last["mode"], "dry_run": last["dry_run"],
+                              "finished": last["finished"], "changed": last["totals"]["changed"],
+                              "errors": last["totals"]["errors"], "files": last["totals"]["files"],
+                              "age_h": int((time.time() - (last["finished"] or last["started"])) // 3600)},
+    }
+
+
 class ConfigIn(BaseModel):
     library_base: str
     supported_exts: List[str]

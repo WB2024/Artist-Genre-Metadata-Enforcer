@@ -268,6 +268,7 @@ async function genres() {
 
 // ------------------------------------------------------------ apply
 async function apply() {
+  await loadState();  // fresh job state (also after Start / when a run finishes)
   const st = S.state, running = st.job?.state === "running";
   const hist = await api("/history");
   view.innerHTML = `
@@ -305,7 +306,7 @@ async function apply() {
       <div class="progressbar mt"><div style="width:${pct}%"></div></div>
       <div class="row small muted mt"><span>${job.done_artists}/${job.total_artists} artists</span>${live && job.current ? `<span>· ${esc(job.current)}</span>` : ""}<span class="spacer"></span>
         <span>${fmtNum(job.totals.files)} files · <b style="color:var(--ok)">${fmtNum(job.totals.changed)} ${job.dry_run ? "would change" : "changed"}</b> · ${fmtNum(job.totals.skipped)} already correct · <b style="color:${job.totals.errors ? "var(--bad)" : "inherit"}">${fmtNum(job.totals.errors)} errors</b></span></div>
-      ${job.log.length ? `<div class="log mt"><table><tbody>${[...job.log].reverse().map((l) => `<tr><td>${esc(l.artist)}</td><td class="muted">${esc(l.genre)}</td><td class="muted">${l.files} files</td><td>${l.changed ? `<span class="pill ok">${l.changed} ${job.dry_run ? "would change" : "changed"}</span>` : `<span class="muted">—</span>`}</td><td>${l.errors ? `<span class="pill bad">${l.errors} err</span>` : ""}</td></tr>`).join("")}</tbody></table></div>` : ""}
+      ${job.log.length ? `<div class="log mt"><table><tbody>${[...job.log].reverse().map((l) => `<tr><td>${esc(l.artist)}</td><td class="muted">${esc(l.genre)}</td><td class="muted">${l.files} file${l.files === 1 ? "" : "s"}</td><td>${l.changed ? `<span class="pill ok">${l.changed} ${job.dry_run ? "would change" : "changed"}</span>` : `<span class="muted">—</span>`}</td><td>${l.errors ? `<span class="pill bad">${l.errors} err</span>` : ""}</td></tr>`).join("")}</tbody></table></div>` : ""}
     </div>`;
     const c = $("#cancel"); if (c) c.onclick = guard(() => api("/job/cancel", { method: "POST" }));
     $("#go") && ($("#go").disabled = live);

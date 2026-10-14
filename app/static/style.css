@@ -43,6 +43,7 @@ nav a.active { background: var(--accent-weak); color: var(--accent); }
 /* cards & layout */
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow); }
 .card + .card { margin-top: 16px; }
+.grid > .card, .grid > .card + .card { margin-top: 0; }
 .card h2 { margin: 0 0 4px; font-size: 16px; }
 .card .sub { color: var(--muted); margin: 0 0 14px; font-size: 14px; }
 .grid { display: grid; gap: 16px; }

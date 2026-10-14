@@ -37,6 +37,45 @@ The original terminal script (`music-genre-enforcer.py`) is still included and d
 
 ---
 
+## 📸 Screenshots
+
+*(Demo library with example artists.)*
+
+**Dashboard** — library coverage at a glance, in light and dark.
+
+<p>
+  <img src="docs/screenshots/dashboard.png" alt="Dashboard" width="49%">
+  <img src="docs/screenshots/dashboard-dark.png" alt="Dashboard, dark mode" width="49%">
+</p>
+
+**Review** — define new artists one at a time. See the tags already on disk, pick from your own genres (A–Z), or click **Check Last.fm** (optional API key) for suggestions, shown in their own panel so they never get mixed up with your genres.
+
+![Review](docs/screenshots/review.png)
+
+**Artists & Genres** — edit inline, filter by exact genre, rename or merge a genre across every artist.
+
+![Artists](docs/screenshots/artists.png)
+![Genres](docs/screenshots/genres.png)
+![Artists filtered by genre](docs/screenshots/artists-genre-filter.png)
+
+**Apply** — smart or full apply with live progress and a per-artist log; dry-run supported.
+
+![Apply](docs/screenshots/apply.png)
+
+**Import / Export** — bring an existing `artist_genres.json` with you. Preview what will be added or changed (merge, add-missing-only, or replace) before committing; a backup is taken automatically.
+
+![Import](docs/screenshots/import.png)
+
+**Settings** — library path, excluded folders (e.g. `Playlists`), single-artist folders (e.g. `Various Artists`), Last.fm key.
+
+![Settings](docs/screenshots/settings.png)
+
+Works on phones too:
+
+<img src="docs/screenshots/review-mobile.png" alt="Review on mobile" width="260">
+
+---
+
 ## ✨ Features
 
 - 🎯 **Artist-based genre enforcement** — Define genre once per artist, apply to their entire discography
