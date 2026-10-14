@@ -47,6 +47,11 @@ SUPPORTED_EXTS_DEFAULT = {
 }
 IGNORE_EXTS = {".lrc", ".jpg", ".jpeg", ".png", ".gif", ".txt", ".nfo", ".cue", ".log", ".pdf"}
 
+# Top-level group folders that hold albums directly (base/<group>/<album>/...)
+# instead of the usual base/<group>/<artist>/<album>/... — treated as a
+# single artist rather than descended into.
+FLAT_ARTIST_GROUP_NAMES = {"various artists"}
+
 BANNER = "=" * 78
 
 
@@ -203,6 +208,11 @@ def discover_artist_dirs(base: Path) -> List[Path]:
     Your structure:
       base/<group>/<artist>/...
 
+    Exception: base/Various Artists/ holds compilation albums directly
+    (base/Various Artists/<album>/...), one level shallower than every
+    other group. That folder is treated as a single artist itself rather
+    than descended into, so compilation albums aren't mistaken for artists.
+
     Returns list of artist dir Paths.
     Uses os.scandir() for faster directory enumeration.
     """
@@ -213,6 +223,9 @@ def discover_artist_dirs(base: Path) -> List[Path]:
     with os.scandir(base) as groups:
         sorted_groups = sorted([e for e in groups if e.is_dir()], key=lambda e: e.name.casefold())
     for group in sorted_groups:
+        if group.name.casefold() in FLAT_ARTIST_GROUP_NAMES:
+            artists.append(Path(group.path))
+            continue
         with os.scandir(group.path) as artist_entries:
             sorted_artists = sorted([e for e in artist_entries if e.is_dir()], key=lambda e: e.name.casefold())
         for artist in sorted_artists:
@@ -313,7 +326,42 @@ def run_config_wizard(cfg_dir: Path, existing: Optional[AppConfig]) -> AppConfig
     return cfg
 
 
-def prompt_for_new_artists(defs: Dict[str, str], artist_names: List[str]) -> Dict[str, str]:
+PEEK_SAMPLE_SIZE = 25
+
+
+def peek_existing_genres(artist_dir: Path, supported_exts: Set[str], sample_size: int = PEEK_SAMPLE_SIZE) -> Tuple[Dict[str, int], int, int]:
+    """
+    Read-only look at the GENRE tags currently on disk for an artist, without
+    writing anything. Returns (counts-by-genre, files_sampled, files_total).
+    """
+    files = list(iter_audio_files(artist_dir, supported_exts))
+    total = len(files)
+    sample = files[:sample_size]
+    counts: Dict[str, int] = {}
+    for f in sample:
+        try:
+            audio = MutagenFile(f, easy=True)
+            if audio is None or audio.tags is None:
+                key = "(no tags)"
+            else:
+                existing = audio.tags.get("genre")
+                val = existing[0] if isinstance(existing, list) and existing else None
+                key = val.strip() if val and val.strip() else "(none)"
+        except Exception:
+            key = "(error)"
+        counts[key] = counts.get(key, 0) + 1
+    return counts, len(sample), total
+
+
+def format_existing_genres(counts: Dict[str, int], sampled: int, total: int) -> str:
+    if total == 0:
+        return "  Existing tags on disk: (no audio files found)"
+    parts = [f"{g} x{c}" for g, c in sorted(counts.items(), key=lambda kv: -kv[1])]
+    suffix = f" (sampled {sampled}/{total} files)" if sampled < total else f" ({total} files)"
+    return "  Existing tags on disk: " + ", ".join(parts) + suffix
+
+
+def prompt_for_new_artists(defs: Dict[str, str], artist_names: List[str], name_to_dir: Dict[str, Path], cfg: AppConfig) -> Dict[str, str]:
     new = [a for a in artist_names if not defs.get(a, "").strip()]
     if not new:
         print("No new artists to define.")
@@ -335,13 +383,19 @@ def prompt_for_new_artists(defs: Dict[str, str], artist_names: List[str]) -> Dic
     print("Enter a single genre, or commands:")
     print("  l = list existing genres")
     print("  p = pick from existing genres")
+    print("  v = view this artist's existing genre tags again")
     print("  ? = help")
     print("  s = skip this artist")
     print()
 
     for artist in sorted(new, key=str.casefold):
+        artist_dir = name_to_dir.get(artist)
+        if artist_dir is not None:
+            counts, sampled, total = peek_existing_genres(artist_dir, cfg.supported_exts)
+            print(format_existing_genres(counts, sampled, total))
+
         while True:
-            raw = input(f"Genre for [{artist}] (or l/p/?/s): ").strip()
+            raw = input(f"Genre for [{artist}] (or l/p/v/?/s): ").strip()
 
             if raw.lower() in ("s", "skip"):
                 break
@@ -350,12 +404,21 @@ def prompt_for_new_artists(defs: Dict[str, str], artist_names: List[str]) -> Dic
                 print("Commands:")
                 print("  l  - list existing unique genres")
                 print("  p  - pick a genre by number from the list")
+                print("  v  - view this artist's existing genre tags again")
                 print("  s  - skip this artist for now")
                 print("Or type a new genre as free text.")
                 continue
 
             if raw.lower() in ("l", "list"):
                 print_genre_list(unique_genres())
+                continue
+
+            if raw.lower() in ("v", "view"):
+                if artist_dir is None:
+                    print("  (Artist folder not found.)")
+                else:
+                    counts, sampled, total = peek_existing_genres(artist_dir, cfg.supported_exts)
+                    print(format_existing_genres(counts, sampled, total))
                 continue
 
             if raw.lower() in ("p", "pick"):
@@ -538,7 +601,7 @@ def menu(cfg_dir: Path) -> int:
             name_to_dir = {p.name: p for p in artist_dirs}
 
             if choice == "2":
-                defs = prompt_for_new_artists(defs, artist_names)
+                defs = prompt_for_new_artists(defs, artist_names, name_to_dir, cfg)
                 save_definitions(cfg_dir, defs)
                 print("\nSaved definitions.")
                 pause()

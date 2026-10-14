@@ -10,6 +10,33 @@ A lightweight, filesystem-driven Python tool that enforces **your personal genre
 
 ---
 
+## 🐳 Docker + Web UI (recommended)
+
+A browser UI (dashboard, card-style review queue, artist/genre management, apply with live progress, JSON import/export) packaged as one container.
+
+```yaml
+services:
+  music-genre-enforcer:
+    image: wb20244/music-genre-enforcer:latest
+    user: "1000:1000"            # must be able to write your music files
+    volumes:
+      - ./config:/config         # definitions, settings, history, backups
+      - /path/to/your/music:/music
+    ports:
+      - 8320:8320
+    restart: unless-stopped
+```
+
+Open `http://<host>:8320`. To bring existing definitions over, go to **Import / Export** and upload your `artist_genres.json` (previewed before anything changes; a backup is taken on commit).
+
+> **No authentication.** The app writes tags to your library, so keep it on your LAN or behind a reverse proxy with auth.
+
+Build locally: `docker build -t music-genre-enforcer .` · Dev: `uvicorn app.main:app --port 8320` (set `CONFIG_DIR` / `LIBRARY_PATH`).
+
+The original terminal script (`music-genre-enforcer.py`) is still included and documented below.
+
+---
+
 ## ✨ Features
 
 - 🎯 **Artist-based genre enforcement** — Define genre once per artist, apply to their entire discography

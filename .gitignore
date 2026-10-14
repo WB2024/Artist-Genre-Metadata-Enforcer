@@ -43,3 +43,4 @@ artist_genres.json
 # Logs
 *.log
 
+.playwright-mcp/

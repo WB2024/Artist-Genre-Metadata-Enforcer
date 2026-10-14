@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Genre Enforcer</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236d5efc'/%3E%3Cpath d='M12 8v12.5a3 3 0 1 1-2-2.8V10l12-3v11.5a3 3 0 1 1-2-2.8V8.5z' fill='white'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand"><span class="logo">♪</span><span>Genre Enforcer</span></div>
+    <nav id="nav">
+      <a href="#/dashboard" data-route="dashboard"><i>◧</i>Dashboard</a>
+      <a href="#/review" data-route="review"><i>✦</i>Review<span class="badge" id="badge-review"></span></a>
+      <a href="#/artists" data-route="artists"><i>☰</i>Artists</a>
+      <a href="#/genres" data-route="genres"><i>◈</i>Genres</a>
+      <a href="#/apply" data-route="apply"><i>▶</i>Apply<span class="dot" id="dot-job"></span></a>
+      <a href="#/data" data-route="data"><i>⇅</i>Import / Export</a>
+      <a href="#/settings" data-route="settings"><i>⚙</i>Settings</a>
+    </nav>
+    <div class="side-foot" id="side-foot"></div>
+  </aside>
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menu-btn" aria-label="Menu">☰</button>
+      <h1 id="page-title"></h1>
+      <span class="pill warn hidden" id="dry-pill">Dry run</span>
+    </header>
+    <main id="view"></main>
+  </div>
+</div>
+<div id="toasts"></div>
+<script src="/assets/app.js"></script>
+</body>
+</html>
