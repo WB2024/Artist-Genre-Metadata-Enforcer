@@ -52,6 +52,13 @@ def normalize_names(names: Iterable[str], default: Optional[List[str]] = None) -
     return out
 
 
+def _clamp(v, lo: int, hi: int, default: int) -> int:
+    try:
+        return max(lo, min(hi, int(v)))
+    except (TypeError, ValueError):
+        return default
+
+
 def normalize_exts(exts: Iterable[str]) -> List[str]:
     out = set()
     for e in exts:
@@ -103,6 +110,10 @@ class Store:
             "excluded_folders": normalize_names(raw.get("excluded_folders"), EXCLUDED_FOLDERS_DEFAULT),
             "flat_folders": normalize_names(raw.get("flat_folders"), FLAT_FOLDERS_DEFAULT),
             "lastfm_api_key": str(raw.get("lastfm_api_key") or "").strip(),
+            "watcher_enabled": bool(raw.get("watcher_enabled", True)),
+            "watch_interval_min": _clamp(raw.get("watch_interval_min"), 1, 1440, 10),
+            "settle_seconds": _clamp(raw.get("settle_seconds"), 0, 3600, 120),
+            "auto_apply": bool(raw.get("auto_apply", True)),
         }
 
     def save_config(self, cfg: dict) -> dict:
@@ -115,6 +126,10 @@ class Store:
                 "excluded_folders": normalize_names(cfg.get("excluded_folders", [])),
                 "flat_folders": normalize_names(cfg.get("flat_folders", [])),
                 "lastfm_api_key": str(cfg.get("lastfm_api_key") or "").strip(),
+                "watcher_enabled": bool(cfg.get("watcher_enabled", True)),
+                "watch_interval_min": _clamp(cfg.get("watch_interval_min"), 1, 1440, 10),
+                "settle_seconds": _clamp(cfg.get("settle_seconds"), 0, 3600, 120),
+                "auto_apply": bool(cfg.get("auto_apply", True)),
             }
             _write_json_atomic(self.dir / "config.json", clean)
             return clean
@@ -238,6 +253,22 @@ def has_changes_since(root: str, since: float) -> bool:
     return False
 
 
+def newest_mtime(root: str) -> float:
+    """Newest mtime of any file or directory under root (0 if unreadable)."""
+    newest = 0.0
+    for dirpath, dirnames, filenames in os.walk(root):
+        for name in (*dirnames, *filenames):
+            try:
+                newest = max(newest, os.path.getmtime(os.path.join(dirpath, name)))
+            except OSError:
+                pass
+    try:
+        newest = max(newest, os.stat(root).st_mtime)
+    except OSError:
+        pass
+    return newest
+
+
 def _first_genre(audio) -> Optional[str]:
     if audio is None or audio.tags is None:
         return None
@@ -245,6 +276,18 @@ def _first_genre(audio) -> Optional[str]:
     if isinstance(g, list):
         return g[0] if g else None
     return g if isinstance(g, str) else None
+
+
+def _all_genres(audio) -> list:
+    """Every GENRE value on the file (multi-valued tags included), stripped."""
+    if audio is None or audio.tags is None:
+        return []
+    g = audio.tags.get("genre")
+    if g is None:
+        return []
+    if isinstance(g, str):
+        g = [g]
+    return [str(x).strip() for x in g if str(x).strip()]
 
 
 def peek_tags(artist_path: str, exts: Set[str], sample: int = PEEK_SAMPLE_SIZE) -> dict:
@@ -256,8 +299,8 @@ def peek_tags(artist_path: str, exts: Set[str], sample: int = PEEK_SAMPLE_SIZE) 
             if audio is None or audio.tags is None:
                 key = "(no tags)"
             else:
-                v = _first_genre(audio)
-                key = v.strip() if v and v.strip() else "(none)"
+                v = "; ".join(_all_genres(audio))
+                key = v if v else "(none)"
         except Exception:
             key = "(error)"
         counts[key] = counts.get(key, 0) + 1
@@ -266,6 +309,29 @@ def peek_tags(artist_path: str, exts: Set[str], sample: int = PEEK_SAMPLE_SIZE) 
         "sampled": min(sample, len(files)),
         "genres": [{"genre": g, "count": c} for g, c in sorted(counts.items(), key=lambda kv: -kv[1])],
     }
+
+
+def _retouch_later(paths, delay: float = 90.0) -> None:
+    """Bump mtime of rewritten files shortly after the write.
+
+    Navidrome may read a file while it is being rewritten and store stale tags
+    together with the new mtime, so quick scans never re-read it. A later mtime
+    guarantees its watcher sees a change and rescans.
+    """
+    paths = list(paths)
+    if not paths:
+        return
+
+    def _run():
+        for p in paths:
+            try:
+                os.utime(p)
+            except OSError:
+                pass
+
+    t = threading.Timer(delay, _run)
+    t.daemon = True
+    t.start()
 
 
 def set_genre_on_file(path: str, genre: str, dry_run: bool) -> Tuple[bool, str]:
@@ -280,7 +346,8 @@ def set_genre_on_file(path: str, genre: str, dry_run: bool) -> Tuple[bool, str]:
                 pass
         if audio.tags is None:
             return (False, "no-tags")
-        if _first_genre(audio) == genre:
+        # Only skip if the tag is EXACTLY [genre]: extra values must be overwritten.
+        if _all_genres(audio) == [genre.strip()]:
             return (False, "ok-same")
         audio.tags["genre"] = [genre]
         if not dry_run:
@@ -352,16 +419,20 @@ def run_apply(job: Job, store: Store, cfg: dict, targets: List[Tuple[str, str, s
             job.current = artist
             files = list(iter_audio_files(path, exts))
             c = {"files": len(files), "changed": 0, "skipped": 0, "errors": 0}
+            changed_files: List[str] = []
             with ThreadPoolExecutor(max_workers=workers) as ex:
-                for ok, status in ex.map(lambda f: set_genre_on_file(f, genre, job.dry_run), files):
+                for f, (ok, status) in zip(files, ex.map(lambda f: set_genre_on_file(f, genre, job.dry_run), files)):
                     if status.startswith("error:"):
                         c["errors"] += 1
                     elif ok:
                         c["changed"] += 1
+                        if not job.dry_run:
+                            changed_files.append(f)
                     else:
                         c["skipped"] += 1
                     if job.cancel.is_set():
                         break
+            _retouch_later(changed_files)
             for k, v in c.items():
                 job.totals[k] += v
             job.done_artists += 1
@@ -372,14 +443,18 @@ def run_apply(job: Job, store: Store, cfg: dict, targets: List[Tuple[str, str, s
             job.state = "cancelled"
         else:
             job.state = "done"
-            if not job.dry_run:
+            # Auto (watcher) runs only touch some artists, so they must not move the
+            # smart-apply timestamp.
+            if not job.dry_run and job.mode != "auto":
                 store.save_last_apply(job.started)
     except Exception as e:  # pragma: no cover
         job.state = "error"
         job.message = f"{e.__class__.__name__}: {e}"
     finally:
         job.finished = time.time()
-        store.add_history({k: v for k, v in job.to_dict(log_tail=0).items() if k != "log"})
+        quiet = job.mode == "auto" and job.state == "done" and not job.totals["changed"] and not job.totals["errors"]
+        if not quiet:  # don't fill the history with no-op watcher runs
+            store.add_history({k: v for k, v in job.to_dict(log_tail=0).items() if k != "log"})
         on_change()
 
 

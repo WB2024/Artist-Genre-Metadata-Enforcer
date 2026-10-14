@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import core
+from .watcher import Watcher
 
 CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", "/config"))
 DEFAULT_LIBRARY = os.environ.get("LIBRARY_PATH", "/music")
@@ -32,16 +33,23 @@ _job_lock = threading.Lock()
 
 # ---------------------------------------------------------------- helpers
 
-def _rescan() -> None:
+def _rescan() -> List[core.ArtistEntry]:
     cfg = store.load_config()
     with _scan_lock:
         _scan["artists"] = core.discover_artists(Path(cfg["library_base"]), cfg["excluded_folders"], cfg["flat_folders"])
         _scan["at"] = time.time()
         _scan["base"] = cfg["library_base"]
+        return _scan["artists"]
+
+
+watcher = Watcher(store, _rescan, lambda *a, **k: _start_job(*a, **k))
 
 
 def _artists() -> List[core.ArtistEntry]:
-    if _scan["at"] is None or _scan["base"] != store.load_config()["library_base"]:
+    cfg = store.load_config()
+    # Rescan when never scanned, the path changed, or the cache is >30s old so new
+    # folders show up in Review without a manual rescan.
+    if _scan["at"] is None or _scan["base"] != cfg["library_base"] or time.time() - _scan["at"] > 30:
         _rescan()
     return _scan["artists"]
 
@@ -78,6 +86,7 @@ def _clean_genre(g: str) -> str:
 def _startup() -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     threading.Thread(target=_rescan, daemon=True).start()
+    watcher.start()
 
 
 @app.get("/api/state")
@@ -120,6 +129,7 @@ def summary():
         "artists": total, "defined": defined, "undefined": total - defined,
         "pct": round(defined * 100 / total) if total else 0,
         "genres": len(genres), "top_genres": genres[:8],
+        "needs_apply": len(watcher.status()["needs_apply"]),
         "dry_run": cfg["dry_run"], "lastfm": bool(cfg["lastfm_api_key"]),
         "running": bool(job and job["state"] == "running"),
         "job": job and {"mode": job["mode"], "done": job["done_artists"], "total": job["total_artists"], "current": job["current"]},
@@ -138,6 +148,10 @@ class ConfigIn(BaseModel):
     workers: int = 8
     excluded_folders: List[str] = []
     flat_folders: List[str] = []
+    watcher_enabled: bool = True
+    watch_interval_min: int = 10
+    settle_seconds: int = 120
+    auto_apply: bool = True
     lastfm_api_key: Optional[str] = None   # None = keep existing, "" = clear
 
 
@@ -326,37 +340,55 @@ class ApplyIn(BaseModel):
     artists: Optional[List[str]] = None
 
 
-@app.post("/api/apply")
-def apply(body: ApplyIn):
+def _start_job(mode: str, targets, since: Optional[float], dry_run: bool, message: str = "") -> Optional[core.Job]:
+    """Start an apply job unless one is already running (returns None then)."""
     global _job
     with _job_lock:
         if _job and _job.state == "running":
-            raise HTTPException(409, "A job is already running.")
+            return None
         cfg = store.load_config()
-        if not Path(cfg["library_base"]).is_dir():
-            raise HTTPException(400, f"Library path does not exist: {cfg['library_base']}")
-        defs = store.load_defs()
-        by_name = _by_name()
-        if body.mode == "selected":
-            wanted = set(body.artists or [])
-            pool = [n for n in wanted]
-        else:
-            pool = list(defs)
-        targets = sorted(((n, defs[n], by_name[n].path) for n in pool if defs.get(n) and n in by_name),
-                         key=lambda t: t[0].casefold())
-        if not targets:
-            raise HTTPException(400, "No defined artists found on disk to apply.")
-
-        since = None
-        if body.mode == "smart":
-            since = store.last_apply()  # None -> first run, process everything
-        dry = cfg["dry_run"] if body.dry_run is None else body.dry_run
-        job = core.Job(id=uuid.uuid4().hex[:8], mode=body.mode, dry_run=dry, started=time.time())
-        if body.mode == "smart" and since is None:
-            job.message = "No previous apply found, processing all artists."
+        job = core.Job(id=uuid.uuid4().hex[:8], mode=mode, dry_run=dry_run, started=time.time())
+        job.message = message
         _job = job
-        threading.Thread(target=core.run_apply, args=(job, store, cfg, targets, since, lambda: None), daemon=True).start()
-        return job.to_dict()
+
+        def _done():
+            if mode in ("smart", "full") and job.state == "done" and not job.dry_run:
+                watcher.clear_needs_apply()
+
+        threading.Thread(target=core.run_apply, args=(job, store, cfg, targets, since, _done), daemon=True).start()
+        return job
+
+
+@app.post("/api/apply")
+def apply(body: ApplyIn):
+    cfg = store.load_config()
+    if not Path(cfg["library_base"]).is_dir():
+        raise HTTPException(400, f"Library path does not exist: {cfg['library_base']}")
+    defs = store.load_defs()
+    by_name = _by_name()
+    pool = list(body.artists or []) if body.mode == "selected" else list(defs)
+    targets = sorted(((n, defs[n], by_name[n].path) for n in pool if defs.get(n) and n in by_name),
+                     key=lambda t: t[0].casefold())
+    if not targets:
+        raise HTTPException(400, "No defined artists found on disk to apply.")
+    since = store.last_apply() if body.mode == "smart" else None  # None on a first run -> everything
+    dry = cfg["dry_run"] if body.dry_run is None else body.dry_run
+    msg = "No previous apply found, processing all artists." if body.mode == "smart" and since is None else ""
+    job = _start_job(body.mode, targets, since, dry, msg)
+    if job is None:
+        raise HTTPException(409, "A job is already running.")
+    return job.to_dict()
+
+
+@app.get("/api/watcher")
+def get_watcher():
+    return watcher.status()
+
+
+@app.post("/api/watcher/run")
+def run_watcher():
+    watcher.run_now()
+    return {"ok": True}
 
 
 @app.get("/api/job")

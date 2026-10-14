@@ -78,6 +78,7 @@ async function dashboard() {
       <p class="sub mt small">${c.orphans ? `${fmtNum(c.orphans)} definition(s) have no matching folder on disk. ` : ""}Last scanned ${fmtTime(st.scanned_at)}.</p>
       <div class="row"><button id="rescan">Rescan library</button></div>
     </div>
+    <div class="card mt" id="watchcard"></div>
     <div class="grid two mt">
       <div class="card">
         <h2>Last apply</h2>
@@ -90,7 +91,30 @@ async function dashboard() {
         <div class="row"><a href="#/data"><button>Import JSON</button></a></div>
       </div>
     </div>`;
+  paintWatcher();
   $("#rescan").onclick = guard(async (e) => { e.target.disabled = true; e.target.textContent = "Scanning…"; await api("/scan", { method: "POST" }); toast("Library rescanned"); await route(); });
+}
+
+const EVT = {
+  new_artist: ["✦", "New artist", "accent"], new_defined: ["＋", "New folder (defined artist)", ""],
+  applied: ["✓", "Tagged", "ok"], needs_apply: ["!", "Needs apply", "warn"],
+  apply_errors: ["✕", "Errors", "bad"], apply_failed: ["✕", "Failed", "bad"],
+};
+const fmtAgo = (t) => { const s = Math.max(0, Date.now() / 1000 - t); return s < 90 ? "just now" : s < 5400 ? `${Math.round(s / 60)}m ago` : s < 129600 ? `${Math.round(s / 3600)}h ago` : `${Math.round(s / 86400)}d ago`; };
+
+async function paintWatcher() {
+  const box = $("#watchcard"); if (!box) return;
+  const w = await api("/watcher");
+  const when = w.ticking ? "checking now…" : w.last_check ? `last checked ${fmtAgo(w.last_check)}` : "waiting for first check";
+  box.innerHTML = `<div class="row"><h2 style="margin:0">Library watcher</h2>
+      <span class="pill ${w.enabled ? "ok" : ""}">${w.enabled ? "on" : "off"}</span>
+      <span class="muted small">${w.enabled ? `every ${w.interval_min} min · ${w.auto_apply ? "auto-applies tags" : "notify only"} · ${when}` : "disabled in Settings"}</span>
+      <span class="spacer"></span><button id="checknow" ${w.ticking ? "disabled" : ""}>Check now</button></div>
+    ${w.needs_apply.length ? `<div class="err-banner mt" style="background:var(--warn-weak);color:var(--warn)">${w.needs_apply.length} defined artist(s) have new files not yet tagged: ${esc(w.needs_apply.slice(0, 4).join(", "))}${w.needs_apply.length > 4 ? "…" : ""}. <a href="#/apply">Run Apply</a></div>` : ""}
+    ${w.pending ? `<p class="small muted mt">${w.pending} artist(s) still being copied; waiting for ${w.settle_seconds}s of quiet before tagging.</p>` : ""}
+    ${w.error ? `<p class="small mt" style="color:var(--bad)">${esc(w.error)}</p>` : ""}
+    ${w.events.length ? `<div class="log mt" style="max-height:230px"><table><tbody>${w.events.map((e) => { const m = EVT[e.kind] || ["•", e.kind, ""]; return `<tr><td style="width:1%"><span class="pill ${m[2]}">${m[0]} ${m[1]}</span></td><td>${e.kind === "new_artist" ? `<a href="#/review">${esc(e.artist)}</a>` : esc(e.artist)}</td><td class="muted">${esc(e.detail)}</td><td class="muted" style="text-align:right;white-space:nowrap">${fmtAgo(e.t)}</td></tr>`; }).join("")}</tbody></table></div>` : `<p class="small muted mt">Nothing new yet. New artists and tagged albums will be listed here.</p>`}`;
+  $("#checknow").onclick = guard(async () => { await api("/watcher/run", { method: "POST" }); toast("Checking…"); setTimeout(() => { paintWatcher(); loadState(); }, 4000); });
 }
 
 // ------------------------------------------------------------ review
@@ -377,13 +401,20 @@ async function settings() {
       <small>Top-level folders that contain albums directly (<code>&lt;folder&gt;/&lt;Album&gt;/…</code>). The whole folder counts as one artist with one genre, e.g. <code>Various Artists</code> → <code>Various</code>.</small></label>
     <label class="field"><span>Last.fm API key</span><input type="password" id="lfmkey" autocomplete="off" placeholder="${c.lastfm_configured ? "Saved — leave blank to keep" : "Paste your API key"}">
       <small>Enables “Check Last.fm” on the Review page. Free key at last.fm/api/account/create. ${c.lastfm_configured ? `<label style="font-weight:400"><input type="checkbox" id="lfmclear"> Remove saved key</label>` : ""}</small></label>
+    <div class="card" style="background:var(--surface-2);box-shadow:none;margin:0 0 14px"><h2>Library watcher</h2>
+      <p class="sub">Checks the library on a schedule so new artists show up in Review and new albums by defined artists are tagged automatically.</p>
+      <label class="check"><input type="checkbox" id="wen" ${c.watcher_enabled ? "checked" : ""}><span>Watch the library</span></label>
+      <label class="check mt"><input type="checkbox" id="waa" ${c.auto_apply ? "checked" : ""}><span>Automatically tag new files for defined artists<small>Off = you only get a notice on the Dashboard and run Apply yourself. Respects the dry-run setting.</small></span></label>
+      <div class="row mt"><label class="field" style="margin:0"><span>Check every (minutes)</span><input type="number" id="wint" min="1" max="1440" value="${c.watch_interval_min}" style="width:130px"></label>
+        <label class="field" style="margin:0"><span>Wait until files are quiet for (seconds)</span><input type="number" id="wset" min="0" max="3600" value="${c.settle_seconds}" style="width:130px"></label></div>
+      <p class="small muted">The quiet period stops half-copied albums being tagged mid-transfer.</p></div>
     <label class="field"><span>Audio file extensions</span><input type="text" id="exts" value="${esc(c.supported_exts.join(", "))}"><small>Comma-separated.</small></label>
     <label class="field"><span>Worker threads</span><input type="number" id="workers" min="1" max="32" value="${c.workers}" style="max-width:120px"><small>Files tagged in parallel per artist. Lower this on slow or network storage.</small></label>
     <label class="check"><input type="checkbox" id="dry" ${c.dry_run ? "checked" : ""}><span>Dry run by default<small>Applies preview changes without writing tags.</small></span></label>
     <div class="row mt"><button class="primary" type="submit">Save settings</button></div></form></div>`;
   $("#sf").onsubmit = guard(async (e) => {
     e.preventDefault();
-    const r = await api("/config", { method: "PUT", json: { library_base: $("#lib").value, supported_exts: $("#exts").value.split(","), dry_run: $("#dry").checked, workers: +$("#workers").value || 8, excluded_folders: $("#excl").value.split(/[\n,]/), flat_folders: $("#flat").value.split(/[\n,]/), lastfm_api_key: $("#lfmclear")?.checked ? "" : ($("#lfmkey").value.trim() || null) } });
+    const r = await api("/config", { method: "PUT", json: { library_base: $("#lib").value, supported_exts: $("#exts").value.split(","), dry_run: $("#dry").checked, workers: +$("#workers").value || 8, excluded_folders: $("#excl").value.split(/[\n,]/), flat_folders: $("#flat").value.split(/[\n,]/), watcher_enabled: $("#wen").checked, auto_apply: $("#waa").checked, watch_interval_min: +$("#wint").value || 10, settle_seconds: +$("#wset").value, lastfm_api_key: $("#lfmclear")?.checked ? "" : ($("#lfmkey").value.trim() || null) } });
     toast(r.library_exists ? "Settings saved" : "Saved, but that path doesn't exist in the container", !r.library_exists);
     await loadState();
   });
