@@ -2,13 +2,12 @@ services:
   music-genre-enforcer:
     image: wb20244/music-genre-enforcer:latest
     container_name: music-genre-enforcer
-    user: "1000:1000"            # must own/write your music files
+    user: "1000:1000"                 # a user that can WRITE to your music files
     environment:
-      - TZ=Europe/London
+      - TZ=Europe/London              # optional
     volumes:
-      - ./config:/config         # config.json, artist_genres.json, history, backups
-      - /mnt/Main20TB/Media/Audio/Music/Sources/Clean:/music
+      - ./config:/config              # your definitions, settings, history, backups
+      - /path/to/your/music:/music    # your library (must be writable)
     ports:
       - 8320:8320
-    network_mode: bridge         # default bridge; avoids allocating a new compose network
     restart: unless-stopped
